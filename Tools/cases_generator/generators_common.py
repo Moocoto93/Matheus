@@ -4,6 +4,7 @@ from typing import TextIO
 from analyzer import (
     Instruction,
     Uop,
+    Label,
     Properties,
     StackItem,
     analysis_error,
@@ -11,7 +12,7 @@ from analyzer import (
 from cwriter import CWriter
 from typing import Callable, TextIO, Iterator, Iterable
 from lexer import Token
-from stack import Storage, StackError
+from stack import Storage, StackError, Stack
 
 # Set this to true for voluminous output showing state of stack and locals
 PRINT_STACKS = False
@@ -90,7 +91,7 @@ def emit_to(out: CWriter, tkn_iter: TokenIterator, end: str) -> Token:
 
 
 ReplacementFunctionType = Callable[
-    [Token, TokenIterator, Uop, Storage, Instruction | None], bool
+    [Token, TokenIterator, Uop | Label, Storage, Instruction | None], bool
 ]
 
 def always_true(tkn: Token | None) -> bool:
@@ -132,7 +133,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -143,38 +144,41 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
-        self.out.emit_at("DEOPT_IF", tkn)
+        self.out.start_line()
+        self.out.emit("if (")
         lparen = next(tkn_iter)
-        self.emit(lparen)
         assert lparen.kind == "LPAREN"
         first_tkn = tkn_iter.peek()
         emit_to(self.out, tkn_iter, "RPAREN")
+        self.emit(") {\n")
         next(tkn_iter)  # Semi colon
-        self.out.emit(", ")
         assert inst is not None
         assert inst.family is not None
-        self.out.emit(inst.family.name)
-        self.out.emit(");\n")
+        family_name = inst.family.name
+        self.emit(f"UPDATE_MISS_STATS({family_name});\n")
+        self.emit(f"assert(_PyOpcode_Deopt[opcode] == ({family_name}));\n")
+        self.emit(f"JUMP_TO_PREDICTED({family_name});\n")
+        self.emit("}\n")
         return not always_true(first_tkn)
 
     exit_if = deopt_if
 
     def goto_error(self, offset: int, label: str, storage: Storage) -> str:
         if offset > 0:
-            return f"goto pop_{offset}_{label};"
+            return f"JUMP_TO_LABEL(pop_{offset}_{label});"
         if offset < 0:
             storage.copy().flush(self.out)
-        return f"goto {label};"
+        return f"JUMP_TO_LABEL({label});"
 
     def error_if(
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -213,7 +217,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -227,7 +231,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -263,7 +267,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -278,7 +282,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -318,7 +322,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -348,7 +352,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -368,7 +372,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -388,7 +392,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -402,7 +406,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -429,7 +433,7 @@ class Emitter:
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -442,7 +446,7 @@ class Emitter:
     def instruction_size(self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -584,6 +588,8 @@ class Emitter:
                         if tkn.text.startswith("DISPATCH"):
                             self._print_storage(storage)
                             reachable = False
+                        if tkn.text.startswith("JUMP_TO_LABEL"):
+                            reachable = False
                         self.out.emit(tkn)
                 elif tkn.kind == "IF":
                     self.out.emit(tkn)
@@ -613,6 +619,20 @@ class Emitter:
         except StackError as ex:
             raise analysis_error(ex.args[0], rbrace) from None
         return storage
+
+    def emit_label(
+        self,
+        label: Label
+    ) -> None:
+        tkn_iter = TokenIterator(label.body)
+        self.out.start_line()
+        for tkn in tkn_iter:
+            if tkn.text in self._replacers:
+                storage = Storage(Stack(), [],[], [])
+                self._replacers[tkn.text](tkn, tkn_iter, label, storage, None)
+                continue
+            self.out.emit(tkn)
+
 
     def emit(self, txt: str | Token) -> None:
         self.out.emit(txt)

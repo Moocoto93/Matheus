@@ -12,6 +12,7 @@ from analyzer import (
     analyze_files,
     StackItem,
     analysis_error,
+    Label,
 )
 from generators_common import (
     DEFAULT_INPUT,
@@ -79,7 +80,7 @@ class Tier2Emitter(Emitter):
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -100,7 +101,7 @@ class Tier2Emitter(Emitter):
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
@@ -120,7 +121,7 @@ class Tier2Emitter(Emitter):
         self,
         tkn: Token,
         tkn_iter: TokenIterator,
-        uop: Uop,
+        uop: Uop | Label,
         storage: Storage,
         inst: Instruction | None,
     ) -> bool:
